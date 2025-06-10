@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: my-app-container
-        image: curion22/devsecops:v1 # Replace with your app image
+        image: curion22/devsecops:latest # Replace with your app image
         ports:
         - containerPort: 80
 
