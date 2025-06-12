@@ -1,0 +1,74 @@
+pipeline{
+    agent any 
+    environment{
+        SCANNER_HOME=tool "Sonar"
+    }
+    stages{
+        stage("Git Check-Out"){
+            steps{
+                git branch: 'main', url: 'https://github.com/rahulsingodia/devsecops-nodejs.git'
+            }
+        }
+        stage("SonarQube Analysis"){
+            steps{
+                withSonarQubeEnv('Sonar') {
+                    sh "$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=DevSecOps -Dsonar.projectKey=DevSecOps"
+                }
+            }
+        }
+        stage("SonarQube Quality Gate"){
+            steps{
+                waitForQualityGate abortPipeline: false, credentialsId: 'sonarqube-token'
+            }
+        }
+        stage("Image Building"){
+            steps{
+                sh "cd /var/lib/jenkins/workspace/DevSecOps"
+                sh "docker build -t $JOB_NAME:v$BUILD_ID . "
+                sh "docker tag $JOB_NAME:v$BUILD_ID curion22/$JOB_NAME:latest"
+                sh "docker tag $JOB_NAME:v$BUILD_ID curion22/$JOB_NAME:v$BUILD_ID"
+            }
+        }
+        stage("Image Scanning"){
+            steps{
+                script {
+                    sh "trivy image --exit-code 0  --format table --output trivy-report.txt curion22/$JOB_NAME:latest"
+                }
+            }
+        }
+        stage("Archive Report") {
+            steps {
+                archiveArtifacts artifacts: 'trivy-report.txt', onlyIfSuccessful: false
+            }
+        }
+        stage("Image Push"){
+            steps{
+                script {
+                    withDockerRegistry(credentialsId: 'Docker-Cred') {
+                        sh "docker push curion22/$JOB_NAME:v$BUILD_ID"
+                        sh "docker push curion22/$JOB_NAME:latest"
+                    }
+                }
+            }
+        }
+        stage("Deploy on Kubernetes"){
+            steps{
+                withKubeConfig(caCertificate: '', clusterName: 'arn:aws:eks:ap-south-1:794038226517:cluster/devsecops', contextName: '', credentialsId: 'k8s-token', namespace: 'gip', restrictKubeConfigAccess: false, serverUrl: 'https://B2B1AA2B470EEF6EDEF1F93B96842E7C.gr7.ap-south-1.eks.amazonaws.com') {
+                    sh "kubectl apply -f deployment.yaml"
+                    sh "kubectl set image deployment/my-app my-app-container=curion22/${JOB_NAME}:v${BUILD_ID} -n gip"
+                }
+            }
+        }
+    }
+    post {
+        always {
+            emailext(
+                subject: "Jenkins Build #${env.BUILD_NUMBER} - ${env.JOB_NAME}",
+                body: """<p>Build Status: ${currentBuild.currentResult}</p>""",
+                to: "rahulsingodia001@gmail.com",
+                replyTo: "rahulsingodia001@gmail.com",
+                mimeType: "text/html"
+            )
+        }
+    }
+}
